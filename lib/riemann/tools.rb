@@ -92,5 +92,25 @@ module Riemann
     end
 
     def tick; end
+
+    def with_each_address(host, &block)
+      addresses = Resolv::DNS.new.getaddresses(host)
+      if addresses.empty?
+        host = host[1...-1] if host[0] == '[' && host[-1] == ']'
+        addresses << IPAddr.new(host)
+      end
+
+      addresses.each do |address|
+        block.call(address.to_s)
+      end
+    end
+
+    def endpoint_name(address, port)
+      if address.ipv6?
+        "[#{address}]:#{port}"
+      else
+        "#{address}:#{port}"
+      end
+    end
   end
 end

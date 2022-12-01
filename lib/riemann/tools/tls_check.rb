@@ -6,25 +6,21 @@ require 'riemann/tools'
 require 'riemann/tools/utils'
 
 module URI
-  class IMAP < Generic
-    DEFAULT_PORT = 143
-  end
-  @@schemes['IMAP'] = IMAP
+  {
+    'IMAP'       => 143,
+    'IMAPS'      => 993,
+    'MYSQL'      => 3306,
+    'POSTGRESQL' => 5432,
+  }.each do |scheme, port|
+    klass = Class.new(Generic)
+    klass.const_set('DEFAULT_PORT', port)
 
-  class IMAPS < Generic
-    DEFAULT_PORT = 993
+    if Gem::Version.new(RUBY_VERSION.dup) < Gem::Version.new('3.1.0')
+      @@schemes[scheme] = klass
+    else
+      register_scheme(scheme, klass)
+    end
   end
-  @@schemes['IMAPS'] = IMAPS
-
-  class MYSQL
-    DEFAULT_PORT = 3306
-  end
-  @@schemes['MYSQL'] = MYSQL
-
-  class POSTGRESQL < Generic
-    DEFAULT_PORT = 5432
-  end
-  @@schemes['POSTGRESQL'] = POSTGRESQL
 end
 
 module Riemann

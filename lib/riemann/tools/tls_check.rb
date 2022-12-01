@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'net/http'
 require 'resolv'
 
 require 'riemann/tools'
@@ -105,8 +106,56 @@ module Riemann
           address: address,
           port: uri.port,
         )
+
+        report_ocsp(uri, address, socket)
       rescue StandardError => e
-        warn(e.message)
+        warn("#{e.class.name}: #{e.message}\n#{e.backtrace.join("\n")}")
+      end
+
+      def report_ocsp(uri, address, socket)
+        subject = socket.peer_cert
+        issuer = socket.peer_cert_chain[1]
+
+        return unless issuer
+
+        digest = OpenSSL::Digest.new('SHA1')
+        certificate_id = OpenSSL::OCSP::CertificateId.new(subject, issuer, digest)
+
+        request = OpenSSL::OCSP::Request.new
+        request.add_certid(certificate_id)
+
+        request.add_nonce
+
+        authority_info_access = subject.extensions.find do |extension|
+          extension.oid == 'authorityInfoAccess'
+        end
+
+        descriptions = authority_info_access.value.split("\n")
+        ocsp = descriptions.find do |description|
+          description.start_with? 'OCSP'
+        end
+
+        ocsp_uri = URI(ocsp[/URI:(.*)/, 1])
+
+        http_response = ::Net::HTTP.start(ocsp_uri.hostname, ocsp_uri.port) do |http|
+          ocsp_uri.path = '/' if ocsp_uri.path.empty?
+          http.post(ocsp_uri.path, request.to_der, 'content-type' => 'application/ocsp-request')
+        end
+
+        response = OpenSSL::OCSP::Response.new http_response.body
+        response_basic = response.basic
+
+        return unless response_basic.verify([issuer], store)
+
+        report(
+          service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} OCSP status",
+          state: response.status_string == 'successful' ? 'ok' : 'critical',
+          description: response.status_string,
+
+          hostname: uri.host,
+          address: address,
+          port: uri.port,
+        )
       end
 
       def acceptable_identities(certificate)

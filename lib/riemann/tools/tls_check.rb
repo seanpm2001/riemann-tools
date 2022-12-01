@@ -31,7 +31,7 @@ module Riemann
       include Riemann::Tools::Utils
 
       opt :uri, 'URI to check', short: :none, type: :strings
-      opt :checks, 'A list of checks to run.', short: :none, type: :strings, default: %w[identity not-after not-before trust]
+      opt :checks, 'A list of checks to run.', short: :none, type: :strings, default: %w[identity not-after not-before ocsp trust]
 
       opt :renewal_duration_days, 'Number of days before certificate expiration it is considered renewalable', short: :none, type: :integer, default: 90
       opt :renewal_duration_ratio, 'Portion of the certificate lifespan it is considered renewalable', short: :none, type: :float, default: 1.0 / 3
@@ -56,60 +56,61 @@ module Riemann
         socket = tls_socket(uri, address)
         return unless socket.peer_cert
 
-        certificate = OpenSSL::X509::Certificate.new(socket.peer_cert)
+        report_not_before(uri, address, socket) if opts[:checks].include?('not-before')
+        report_not_after(uri, address, socket) if opts[:checks].include?('not-after')
+        report_identity(uri, address, socket) if opts[:checks].include?('identity')
+        report_trust(uri, address, socket) if opts[:checks].include?('trust')
+        report_ocsp(uri, address, socket) if opts[:checks].include?('ocsp')
+      end
 
-        if opts[:checks].include?('not-before')
-          report(
-            service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} not before",
-            state: not_before_state(certificate),
-            metric: certificate.not_before - now,
-            description: when_from_now(certificate.not_before),
+      def report_not_after(uri, address, socket)
+        report(
+          service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} not after",
+          state: not_after_state(socket.peer_cert),
+          metric: socket.peer_cert.not_after - now,
+          description: when_from_now(socket.peer_cert.not_after),
 
-            hostname: uri.host,
-            address: address,
-            port: uri.port,
-          )
-        end
-        if opts[:checks].include?('not-after')
-          report(
-            service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} not after",
-            state: not_after_state(certificate),
-            metric: certificate.not_after - now,
-            description: when_from_now(certificate.not_after),
+          hostname: uri.host,
+          address: address,
+          port: uri.port,
+        )
+      end
 
-            hostname: uri.host,
-            address: address,
-            port: uri.port,
-          )
-        end
+      def report_not_before(uri, address, socket)
+        report(
+          service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} not before",
+          state: not_before_state(socket.peer_cert),
+          metric: socket.peer_cert.not_before - now,
+          description: when_from_now(socket.peer_cert.not_before),
 
-        if opts[:checks].include?('identity')
-          report(
-            service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} identity",
-            state: OpenSSL::SSL.verify_certificate_identity(certificate, uri.host) ? 'ok' : 'critical',
-            description: "Valid for:\n#{acceptable_identities(certificate).join("\n")}",
+          hostname: uri.host,
+          address: address,
+          port: uri.port,
+        )
+      end
 
-            hostname: uri.host,
-            address: address,
-            port: uri.port,
-          )
-        end
+      def report_identity(uri, address, socket)
+        report(
+          service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} identity",
+          state: OpenSSL::SSL.verify_certificate_identity(socket.peer_cert, uri.host) ? 'ok' : 'critical',
+          description: "Valid for:\n#{acceptable_identities(socket.peer_cert).join("\n")}",
 
-        return unless opts[:checks].include?('trust')
+          hostname: uri.host,
+          address: address,
+          port: uri.port,
+        )
+      end
 
+      def report_trust(uri, address, socket)
         report(
           service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} trust",
-          state: store.verify(certificate, socket.peer_cert_chain) ? 'ok' : 'critical',
+          state: store.verify(socket.peer_cert, socket.peer_cert_chain) ? 'ok' : 'critical',
           description: "Certificate chain:\n#{socket.peer_cert_chain.map { |cert| cert.subject.to_s }.join("\n")}",
 
           hostname: uri.host,
           address: address,
           port: uri.port,
         )
-
-        report_ocsp(uri, address, socket)
-      rescue StandardError => e
-        warn("#{e.class.name}: #{e.message}\n#{e.backtrace.join("\n")}")
       end
 
       def report_ocsp(uri, address, socket)
@@ -145,7 +146,7 @@ module Riemann
         response = OpenSSL::OCSP::Response.new http_response.body
         response_basic = response.basic
 
-        return unless response_basic.verify([issuer], store)
+        return unless response_basic&.verify([issuer], store)
 
         report(
           service: "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)} OCSP status",

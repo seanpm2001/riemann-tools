@@ -8,10 +8,10 @@ require 'riemann/tools/utils'
 
 module URI
   {
-    'IMAP'       => 143,
-    'IMAPS'      => 993,
-    'MYSQL'      => 3306,
-    'POSTGRESQL' => 5432,
+    'IMAP'     => 143,
+    'IMAPS'    => 993,
+    'MYSQL'    => 3306,
+    'POSTGRES' => 5432,
   }.each do |scheme, port|
     klass = Class.new(Generic)
     klass.const_set('DEFAULT_PORT', port)
@@ -233,9 +233,37 @@ module Riemann
           imap_tls_socket(uri, address)
         when 'ldap'
           ldap_tls_socket(uri, address)
+        when 'mysql'
+          mysql_tls_socket(uri, address)
+        when 'postgres'
+          postgres_tls_socket(uri, address)
         else
           raw_tls_socket(uri, address)
         end
+      end
+
+      def mysql_tls_socket(uri, address)
+        socket = TCPSocket.new(address, uri.port)
+        length = "#{socket.read(3)}\0".unpack1('L*')
+        _sequence = socket.read(1)
+        body = socket.read(length)
+        initial_handshake_packet = body.unpack('cZ*La8aScSS')
+
+        capabilities = initial_handshake_packet[5] | (initial_handshake_packet[8] << 16)
+
+        ssl_flag = 1 << 11
+        raise 'No TLS support' if (capabilities & ssl_flag).zero?
+
+        socket.write(['2000000185ae7f0000000001210000000000000000000000000000000000000000000000'].pack('H*'))
+        tls_handshake(socket, uri.host)
+      end
+
+      def postgres_tls_socket(uri, address)
+        socket = TCPSocket.new(address, uri.port)
+        socket.write(['0000000804d2162f'].pack('H*'))
+        raise 'Unexpected reply' unless socket.read(1) == 'S'
+
+        tls_handshake(socket, uri.host)
       end
 
       def smtp_tls_socket(uri, address)

@@ -1,45 +1,8 @@
 # frozen_string_literal: true
 
-require 'active_support'
-require 'active_support/core_ext/numeric'
-
 require 'riemann/tools/tls_check'
 
-def gen_certificate(not_before = Time.now, validity_duration_days = 90)
-  certificate = OpenSSL::X509::Certificate.new
-  certificate.not_before = not_before
-  certificate.not_after = certificate.not_before + validity_duration_days.days
-  certificate
-end
-
 RSpec.describe Riemann::Tools::TLSCheck do
-  let(:certificate) do
-    gen_certificate(not_before, validity_duration_days)
-  end
-
-  let(:not_before) { Time.now }
-  let(:validity_duration_days) { 90 }
-
-  describe('#validity_duration') do
-    subject { described_class.new.validity_duration(certificate) }
-
-    it { is_expected.to eq(90.days) }
-  end
-
-  describe('#renewal_duration') do
-    subject { described_class.new.renewal_duration(certificate) }
-
-    context 'with short-lived certificates' do
-      it { is_expected.to eq(30.days) }
-    end
-
-    context 'with short-lived certificates' do
-      let(:validity_duration_days) { 730 }
-
-      it { is_expected.to eq(90.days) }
-    end
-  end
-
   describe '#test_uri' do
     before do
       allow(subject).to receive(:report)

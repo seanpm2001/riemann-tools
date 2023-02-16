@@ -94,7 +94,12 @@ module Riemann
     def tick; end
 
     def with_each_address(host, &block)
-      addresses = Resolv::DNS.new.getaddresses(host)
+      addresses = if host == 'localhost'
+                    loopback_addresses
+                  else
+                    Resolv::DNS.new.getaddresses(host)
+                  end
+
       if addresses.empty?
         host = host[1...-1] if host[0] == '[' && host[-1] == ']'
         addresses << IPAddr.new(host)
@@ -103,6 +108,10 @@ module Riemann
       addresses.each do |address|
         block.call(address.to_s)
       end
+    end
+
+    def loopback_addresses
+      Socket.ip_address_list.select { |address| address.ipv6_loopback? || address.ipv4_loopback? }.map(&:ip_address)
     end
 
     def endpoint_name(address, port)

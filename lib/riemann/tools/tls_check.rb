@@ -251,6 +251,8 @@ module Riemann
         report_identity(tls_check_result) if opts[:checks].include?('identity')
         report_trust(tls_check_result) if opts[:checks].include?('trust')
         report_ocsp(tls_check_result) if opts[:checks].include?('ocsp')
+      rescue Errno::ECONNREFUSED => e
+        report_unavailability(uri, address, e)
       end
 
       def report_availability(tls_check_result)
@@ -275,6 +277,14 @@ module Riemann
             description: issues.join("\n"),
           )
         end
+      end
+
+      def report_unavailability(uri, address, exception)
+        report(
+          service: "#{tls_endpoint_name2(uri, address)} availability",
+          state: 'critical',
+          description: exception.message,
+        )
       end
 
       def report_not_after(tls_check_result)
@@ -498,7 +508,11 @@ module Riemann
       end
 
       def tls_endpoint_name(tls_check_result)
-        "TLS certificate #{tls_check_result.uri} #{endpoint_name(IPAddr.new(tls_check_result.address), tls_check_result.uri.port)}"
+        tls_endpoint_name2(tls_check_result.uri, tls_check_result.address)
+      end
+
+      def tls_endpoint_name2(uri, address)
+        "TLS certificate #{uri} #{endpoint_name(IPAddr.new(address), uri.port)}"
       end
     end
   end

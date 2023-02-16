@@ -226,17 +226,84 @@ module Riemann
 
       opt :trust, 'Additionnal CA to trust', short: :none, type: :strings, default: []
 
+      opt :resolvers, 'Run this number of resolver threads', short: :none, type: :integer, default: 5
+      opt :workers, 'Run this number of worker threads', short: :none, type: :integer, default: 20
+
+      def initialize
+        @resolve_queue = Queue.new
+        @work_queue = Queue.new
+
+        opts[:resolvers].times do
+          Thread.new do
+            loop do
+              uri = @resolve_queue.pop
+              host = uri.host
+
+              addresses = if host == 'localhost'
+                            Socket.ip_address_list.select { |address| address.ipv6_loopback? || address.ipv4_loopback? }.map(&:ip_address)
+                          else
+                            Resolv::DNS.new.getaddresses(host)
+                          end
+              if addresses.empty?
+                host = host[1...-1] if host[0] == '[' && host[-1] == ']'
+                begin
+                  addresses << IPAddr.new(host)
+                rescue IPAddr::InvalidAddressError
+                  # Ignore
+                end
+              end
+
+              @work_queue.push([uri, addresses])
+            end
+          end
+        end
+
+        opts[:workers].times do
+          Thread.new do
+            loop do
+              uri, addresses = @work_queue.pop
+              test_uri_addresses(uri, addresses)
+            end
+          end
+        end
+
+        super
+      end
+
       def tick
+        report(
+          service: 'riemann tls-check resolvers utilization',
+          metric: (opts[:resolvers].to_f - @resolve_queue.num_waiting) / opts[:resolvers],
+          state: @resolve_queue.num_waiting.positive? ? 'ok' : 'critical',
+          tags: %w[riemann],
+        )
+        report(
+          service: 'riemann tls-check resolvers saturation',
+          metric: @resolve_queue.length,
+          state: @resolve_queue.empty? ? 'ok' : 'critical',
+          tags: %w[riemann],
+        )
+        report(
+          service: 'riemann tls-check workers utilization',
+          metric: (opts[:workers].to_f - @work_queue.num_waiting) / opts[:workers],
+          state: @work_queue.num_waiting.positive? ? 'ok' : 'critical',
+          tags: %w[riemann],
+        )
+        report(
+          service: 'riemann tls-check workers saturation',
+          metric: @work_queue.length,
+          state: @work_queue.empty? ? 'ok' : 'critical',
+          tags: %w[riemann],
+        )
+
         opts[:uri].each do |uri|
-          test_uri(uri)
+          @resolve_queue.push(URI(uri))
         end
       end
 
-      def test_uri(uri)
-        uri = URI(uri)
-
-        with_each_address(uri.host) do |address|
-          test_uri_address(uri, address)
+      def test_uri_addresses(uri, addresses)
+        addresses.each do |address|
+          test_uri_address(uri, address.to_s)
         end
       end
 
